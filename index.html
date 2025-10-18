@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Offline Müzik Çalar (HTML PWA)</title>
+  <meta name="description" content="Basit offline müzik çalar. Şarkıları ekle, sakla ve karıştırarak çal." />
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#8b5cf6;--muted:#94a3b8;color-scheme:dark}
+    *{box-sizing:border-box}html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg),#071024);font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    .app{max-width:900px;margin:12px auto;padding:14px}
+    header{display:flex;align-items:center;gap:12px}
+    h1{font-size:1.05rem;margin:0;color:#e6eef8}
+    .card{background:linear-gradient(180deg,var(--card),#061426);border-radius:14px;padding:12px;margin-top:12px;box-shadow:0 6px 30px rgba(2,6,23,.6)}
+    .controls{display:flex;gap:8px;align-items:center;justify-content:center;padding:10px}
+    button{background:transparent;border:1px solid rgba(255,255,255,.06);padding:8px 10px;border-radius:10px;color:#cfe6ff;font-weight:600}
+    .big{font-size:1.2rem;padding:12px 16px}
+    .playlist{max-height:50vh;overflow:auto;margin-top:12px;padding:6px;border-radius:10px}
+    .track{display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:8px;margin:6px 0;background:linear-gradient(90deg,rgba(255,255,255,.01),transparent)}
+    .track .meta{display:flex;gap:10px;align-items:center}
+    .drop{border:2px dashed rgba(255,255,255,.04);padding:16px;text-align:center;border-radius:10px;color:var(--muted);margin-top:10px}
+    .progress{width:100%;height:8px;background:rgba(255,255,255,.04);border-radius:8px;overflow:hidden}
+    .progress > i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#22c55e)}
+    input[type=file]{display:none}
+    .small{font-size:.85rem;color:var(--muted)}
+    .flex{display:flex;gap:8px;align-items:center}
+    .btn-icon{width:44px;height:44px;border-radius:10px}
+    .row{display:flex;justify-content:space-between;align-items:center}
+    .muted{color:var(--muted)}
+    footer{margin-top:12px;text-align:center;color:var(--muted);font-size:.78rem}
+    @media (max-width:520px){.controls{flex-wrap:wrap}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" aria-hidden><path d="M9 19V6l12-2v13" stroke="#8b5cf6" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6" width="6" height="12" rx="2" stroke="#8b5cf6" stroke-width="1.4"/></svg>
+      <div>
+        <h1>Offline Müzik Çalar</h1>
+        <div class="small muted">Şarkıları ekle — tarayıcıda saklanır; çevrimdışı çalışır.</div>
+      </div>
+    </header>
+
+    <section class="card" id="appCard">
+      <div class="row">
+        <div class="flex">
+          <label for="fileInput" class="small button-like" style="cursor:pointer;padding:6px 10px;border-radius:8px;background:linear-gradient(90deg,rgba(139,92,246,.12),transparent);border:1px solid rgba(139,92,246,.12);color:#dbeafe;font-weight:600">➕ Şarkı Ekle</label>
+          <input id="fileInput" type="file" accept="audio/*" multiple />
+          <button id="clearAll">🗑️ Hepsini Sil</button>
+        </div>
+        <div class="flex">
+          <button id="shuffleBtn">🔀 Karıştır</button>
+          <button id="repeatBtn">🔁 Tekrar: Kapalı</button>
+        </div>
+      </div>
+
+      <div class="drop" id="dropArea">Dosyaları buraya sürükleyin veya + butonuna dokunun</div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="controls">
+          <button id="prevBtn" class="btn-icon">⏮</button>
+          <button id="playBtn" class="big">▶️</button>
+          <button id="nextBtn" class="btn-icon">⏭</button>
+        </div>
+
+        <div style="padding:8px">
+          <div class="progress" id="progressBar"><i></i></div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px"><div id="currentTime" class="small muted">0:00</div><div id="totalTime" class="small muted">0:00</div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+            <div class="small muted">Ses</div>
+            <input id="volume" type="range" min="0" max="1" step="0.01" value="1" style="width:50%" />
+          </div>
+        </div>
+      </div>
+
+      <div class="playlist" id="playlist"></div>
+
+    </section>
+
+    <footer class="small muted">Tarayıcı tarafından saklanır. iOS'ta servis çalışanı ve arka plan oynatma sınırlamaları olabilir.</footer>
+  </div>
+
+  <script>
+  // Basit offline müzik çalar — IndexedDB depolama, shuffle, repeat, service worker
+  (async()=>{
+    const dbName = 'offline-music-db';
+    const storeName = 'tracks';
+    const db = await openDB();
+
+    // UI elemanları
+    const fileInput = document.getElementById('fileInput');
+    const dropArea = document.getElementById('dropArea');
+    const playlistEl = document.getElementById('playlist');
+    const playBtn = document.getElementById('playBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const clearAll = document.getElementById('clearAll');
+    const shuffleBtn = document.getElementById('shuffleBtn');
+    const repeatBtn = document.getElementById('repeatBtn');
+    const progressBar = document.getElementById('progressBar').firstElementChild;
+    const currentTimeEl = document.getElementById('currentTime');
+    const totalTimeEl = document.getElementById('totalTime');
+    const volume = document.getElementById('volume');
+
+    let audio = new Audio();
+    audio.preload = 'metadata';
+    let tracks = []; // {id,name,url,duration}
+    let order = [];
+    let currentIndex = 0;
+    let isShuffled = JSON.parse(localStorage.getItem('isShuffled')||'false');
+    let repeatMode = localStorage.getItem('repeatMode')||'off'; // off, one, all
+
+    // Load saved tracks
+    await loadTracksFromDB();
+    renderPlaylist();
+    applySettings();
+
+    // File input
+    fileInput.addEventListener('change', e=>{
+      addFiles([...e.target.files]);
+      fileInput.value = '';
+    });
+
+    // Drag & drop
+    ['dragenter','dragover'].forEach(ev=>dropArea.addEventListener(ev,e=>{e.preventDefault();dropArea.style.borderColor='rgba(139,92,246,.6)'}));
+    ['dragleave','drop'].forEach(ev=>dropArea.addEventListener(ev,e=>{e.preventDefault();dropArea.style.borderColor='rgba(255,255,255,.04)'}));
+    dropArea.addEventListener('drop', e=>{
+      const files = [...e.dataTransfer.files].filter(f=>f.type.startsWith('audio/'));
+      if(files.length) addFiles(files);
+    });
+
+    // Controls
+    playBtn.addEventListener('click', togglePlay);
+    prevBtn.addEventListener('click', playPrev);
+    nextBtn.addEventListener('click', playNext);
+    clearAll.addEventListener('click', async ()=>{ if(confirm('Tüm müzikleri silmek istiyor musunuz?')){await clearDB(); tracks=[]; order=[]; currentIndex=0; renderPlaylist(); saveState();}});
+    shuffleBtn.addEventListener('click', ()=>{ isShuffled = !isShuffled; localStorage.setItem('isShuffled', JSON.stringify(isShuffled)); updateShuffleUI(); rebuildOrder(); });
+    repeatBtn.addEventListener('click', ()=>{ repeatMode = repeatMode==='off'?'all':repeatMode==='all'?'one':'off'; localStorage.setItem('repeatMode', repeatMode); updateRepeatUI(); });
+
+    volume.addEventListener('input', ()=>audio.volume = volume.value);
+
+    audio.addEventListener('timeupdate', ()=>{
+      const pct = (audio.currentTime / (audio.duration||1))*100;
+      progressBar.style.width = pct + '%';
+      currentTimeEl.textContent = formatTime(audio.currentTime);
+      totalTimeEl.textContent = formatTime(audio.duration||0);
+    });
+
+    audio.addEventListener('ended', ()=>{
+      if(repeatMode==='one') { audio.currentTime = 0; audio.play(); return; }
+      if(currentIndex < order.length-1) { playNext(); }
+      else { if(repeatMode==='all'){ currentIndex=0; playCurrent(); } else { playBtn.textContent='▶️'; }}
+    });
+
+    // Playlist actions
+    function renderPlaylist(){
+      playlistEl.innerHTML='';
+      order.forEach((id,idx)=>{
+        const t = tracks.find(x=>x.id===id);
+        if(!t) return;
+        const el = document.createElement('div'); el.className='track';
+        el.innerHTML = `<div class='meta'><div style='width:36px;height:36px;border-radius:6px;background:linear-gradient(90deg,rgba(139,92,246,.16),transparent);display:flex;align-items:center;justify-content:center;font-weight:700'>♫</div><div><div style='font-weight:600;color:#e6eef8'>${escapeHtml(t.name)}</div><div class='small muted'>${formatTime(t.duration||0)}</div></div></div><div class='flex'><button data-id='${t.id}' class='playNow'>▶</button><button data-id='${t.id}' class='remove'>✖</button></div>`;
+        playlistEl.appendChild(el);
+        el.querySelector('.playNow').addEventListener('click', ()=>{ currentIndex = order.indexOf(t.id); playCurrent(); });
+        el.querySelector('.remove').addEventListener('click', async ()=>{ await removeTrack(t.id); renderPlaylist(); });
+      });
+      highlightCurrent();
+    }
+
+    function highlightCurrent(){
+      Array.from(playlistEl.children).forEach((el,i)=>{ el.style.opacity = (i===currentIndex? '1':'0.7'); el.style.boxShadow = (i===currentIndex? 'inset 0 0 0 2px rgba(139,92,246,.08)':'none'); });
+    }
+
+    function togglePlay(){ if(audio.src && !audio.paused){ audio.pause(); playBtn.textContent='▶️'; } else { if(!audio.src) playCurrent(); else { audio.play(); playBtn.textContent='⏸'; } }}
+    function playPrev(){ if(currentIndex>0){ currentIndex--; playCurrent(); } }
+    function playNext(){ if(currentIndex<order.length-1){ currentIndex++; playCurrent(); } else if(repeatMode==='all'){ currentIndex=0; playCurrent(); } }
+
+    async function playCurrent(){
+      if(order.length===0) return alert('Çalmaya hazır şarkı yok. Lütfen şarkı ekleyin.');
+      const id = order[currentIndex];
+      const t = tracks.find(x=>x.id===id);
+      if(!t) return;
+      // create object URL from blob stored in DB
+      const rec = await getTrackFromDB(id);
+      const blob = rec.blob;
+      const url = URL.createObjectURL(blob);
+      audio.src = url;
+      await audio.play().catch(()=>{});
+      playBtn.textContent='⏸';
+      saveState();
+      renderPlaylist();
+      highlightCurrent();
+    }
+
+    // Storage functions (IndexedDB)
+    function openDB(){
+      return new Promise((res,rej)=>{
+        const r = indexedDB.open(dbName,1);
+        r.onupgradeneeded = ()=>{
+          const db = r.result;
+          if(!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName, {keyPath:'id'});
+        };
+        r.onsuccess = ()=>res(r.result);
+        r.onerror = ()=>rej(r.error);
+      });
+    }
+    function idbAdd(track){
+      return new Promise((res,rej)=>{
+        const tx = db.transaction([storeName],'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.add(track);
+        req.onsuccess = ()=>res(true);
+        req.onerror = ()=>rej(req.error);
+      });
+    }
+    function getAllFromDB(){
+      return new Promise((res,rej)=>{
+        const tx = db.transaction([storeName],'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.getAll();
+        req.onsuccess = ()=>res(req.result);
+        req.onerror = ()=>rej(req.error);
+      });
+    }
+    function getTrackFromDB(id){
+      return new Promise((res,rej)=>{
+        const tx = db.transaction([storeName],'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.get(id);
+        req.onsuccess = ()=>res(req.result);
+        req.onerror = ()=>rej(req.error);
+      });
+    }
+    function deleteFromDB(id){
+      return new Promise((res,rej)=>{
+        const tx = db.transaction([storeName],'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.delete(id);
+        req.onsuccess = ()=>res(true);
+        req.onerror = ()=>rej(req.error);
+      });
+    }
+    function clearDB(){
+      return new Promise((res,rej)=>{
+        const tx = db.transaction([storeName],'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.clear();
+        req.onsuccess = ()=>res(true);
+        req.onerror = ()=>rej(req.error);
+      });
+    }
+
+    async function loadTracksFromDB(){
+      const rows = await getAllFromDB();
+      tracks = rows.map(r=>({id:r.id,name:r.name,duration:r.duration}));
+      // restore order and state
+      const savedOrder = JSON.parse(localStorage.getItem('order')||'null');
+      if(savedOrder && savedOrder.every(id=>tracks.some(t=>t.id===id))) order = savedOrder; else order = tracks.map(t=>t.id);
+      // restore index
+      currentIndex = parseInt(localStorage.getItem('currentIndex')||'0',10);
+      if(currentIndex >= order.length) currentIndex = 0;
+      rebuildOrder();
+    }
+
+    async function addFiles(files){
+      for(const f of files){
+        try{
+          const arrayBuf = await f.arrayBuffer();
+          // get duration by creating temporary audio
+          const tempUrl = URL.createObjectURL(new Blob([arrayBuf]));
+          const dur = await measureDuration(tempUrl);
+          URL.revokeObjectURL(tempUrl);
+          const id = crypto.randomUUID();
+          await idbAdd({id,name:f.name,blob:new Blob([arrayBuf]),duration:dur});
+          tracks.push({id,name:f.name,duration:dur});
+          order.push(id);
+        }catch(err){ console.error('add err',err); }
+      }
+      saveState();
+      renderPlaylist();
+    }
+
+    async function removeTrack(id){
+      await deleteFromDB(id);
+      tracks = tracks.filter(t=>t.id!==id);
+      order = order.filter(x=>x!==id);
+      if(currentIndex >= order.length) currentIndex = Math.max(0, order.length-1);
+      saveState();
+    }
+
+    function rebuildOrder(){
+      if(isShuffled){
+        // preserve current track id if playing
+        const currentId = order[currentIndex];
+        order = shuffleArray(tracks.map(t=>t.id));
+        if(currentId) currentIndex = Math.max(0, order.indexOf(currentId));
+      } else {
+        order = tracks.map(t=>t.id);
+        // keep index referring to the same id if possible
+        const currentId = order[currentIndex];
+        if(currentId) currentIndex = Math.max(0, order.indexOf(currentId));
+      }
+      saveState(); renderPlaylist(); updateShuffleUI();
+    }
+
+    function saveState(){
+      localStorage.setItem('order', JSON.stringify(order));
+      localStorage.setItem('currentIndex', String(currentIndex));
+      localStorage.setItem('isShuffled', JSON.stringify(isShuffled));
+      localStorage.setItem('repeatMode', repeatMode);
+    }
+
+    function applySettings(){ updateShuffleUI(); updateRepeatUI(); audio.volume = parseFloat(localStorage.getItem('volume')||'1'); volume.value = audio.volume; }
+    function updateShuffleUI(){ shuffleBtn.textContent = isShuffled? '🔀 Karıştır: Açık':'🔀 Karıştır'; }
+    function updateRepeatUI(){ repeatBtn.textContent = repeatMode==='off'? '🔁 Tekrar: Kapalı' : repeatMode==='one'? '🔁 Tekrar: Bir' : '🔁 Tekrar: Tümü'; }
+
+    function formatTime(s){ if(!s || isNaN(s)) return '0:00'; s = Math.floor(s); const m = Math.floor(s/60); const sec = String(s%60).padStart(2,'0'); return `${m}:${sec}`; }
+    function escapeHtml(s){ return s.replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+    function shuffleArray(arr){ const a = arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+    function measureDuration(url){ return new Promise((res)=>{ const t = document.createElement('audio'); t.preload='metadata'; t.src = url; t.addEventListener('loadedmetadata', ()=>{ res(t.duration); t.src=''; t.remove(); }); t.onerror = ()=>res(0); }); }
+
+    // retrieve single track record (including blob)
+    async function getTrackFromDB(id){
+      return await getTrackFromDB_internal(id);
+      function getTrackFromDB_internal(id){
+        return new Promise((res,rej)=>{
+          const tx = db.transaction([storeName],'readonly');
+          const store = tx.objectStore(storeName);
+          const req = store.get(id);
+          req.onsuccess = ()=>res(req.result);
+          req.onerror = ()=>rej(req.error);
+        });
+      }
+    }
+
+    // register service worker via blob for offline shell
+    if('serviceWorker' in navigator){
+      try{
+        const swCode = `self.addEventListener('install', e=>{self.skipWaiting(); e.waitUntil(caches.open('app-shell-v1').then(c=>c.addAll(['/', '/index.html'])))});
+        self.addEventListener('fetch', e=>{ const url = new URL(e.request.url); if(url.origin === location.origin){ e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(f=>{caches.open('app-shell-v1').then(c=>c.put(e.request,f.clone())); return f;})) ) } });`;
+        const blob = new Blob([swCode], {type:'application/javascript'});
+        const swUrl = URL.createObjectURL(blob);
+        navigator.serviceWorker.register(swUrl).catch(()=>{});
+      }catch(e){console.warn('sw register failed',e)}
+    }
+
+    // helpers to avoid name collision with inner getTrackFromDB
+    function getTrackFromDB_internal(id){
+      return new Promise((res,rej)=>{
+        const tx = db.transaction([storeName],'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.get(id);
+        req.onsuccess = ()=>res(req.result);
+        req.onerror = ()=>rej(req.error);
+      });
+    }
+
+  })();
+  </script>
+</body>
+</html>
